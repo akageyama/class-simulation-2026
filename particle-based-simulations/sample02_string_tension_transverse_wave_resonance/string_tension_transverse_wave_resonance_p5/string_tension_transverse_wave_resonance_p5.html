@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>string_tension_transverse_wave_resonance p5.js</title>
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      background: #f5f5f5;
+      font-family: sans-serif;
+    }
+    main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+    #info {
+      width: 1000px;
+      max-width: calc(100vw - 40px);
+      background: white;
+      padding: 12px 16px;
+      margin-bottom: 12px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      line-height: 1.5;
+      box-sizing: border-box;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div id="info">
+    <strong>string_tension_transverse_wave_resonance</strong><br>
+    Mouse click: start/stop calculation
+  </div>
+</main>
+
+<script>
+// Converted from Processing to p5.js
+// Original: string_tension_transverse_wave_resonance.pde, Akira Kageyama
+
+let RunningStateToggle = false;
+
+//-------------------- input parameters --------------------
+const STRING_NATURAL_LENGTH   = 1.0;    // m
+const STRING_STRETCHED_LENGTH = 1.1;    // m
+const STRING_MASS             = 0.001;  // kg
+const STRING_TENSION_FORCE    = 1.0;    // N
+const NUM_OF_PARTICLES = 100;
+const DISPLAY_SPEED = 50;
+const DISPLAY_PHASE_VELOCITY_MARKS = false;
+//----------------------------------------------------------
+
+//-------------------- derived parameters --------------------
+const STRING_STRETCH = STRING_STRETCHED_LENGTH - STRING_NATURAL_LENGTH;
+const STRING_TENSION_COEFFICIENT = STRING_TENSION_FORCE / STRING_STRETCH;
+const STRING_MASS_DENSITY = STRING_MASS / STRING_NATURAL_LENGTH;
+
+const SPRING_NATURAL_LENGTH = STRING_NATURAL_LENGTH / (NUM_OF_PARTICLES - 1);
+const SPRING_STRETCHED_LENGTH = STRING_STRETCHED_LENGTH / (NUM_OF_PARTICLES - 1);
+const MASS_OF_A_PARTICLE = STRING_MASS_DENSITY * SPRING_NATURAL_LENGTH;
+const SPRING_STRETCH = SPRING_STRETCHED_LENGTH - SPRING_NATURAL_LENGTH;
+const SPRING_CONST = STRING_TENSION_FORCE / SPRING_STRETCH;
+
+const STRING_PHASE_VELOCITY = Math.sqrt(STRING_TENSION_FORCE / STRING_MASS_DENSITY);
+//------------------------------------------------------------
+
+let particlePosX = new Array(NUM_OF_PARTICLES);
+let particlePosY = new Array(NUM_OF_PARTICLES);
+let particleVelX = new Array(NUM_OF_PARTICLES);
+let particleVelY = new Array(NUM_OF_PARTICLES);
+let springK = new Array(NUM_OF_PARTICLES - 1);
+
+let springOmegaSq = SPRING_CONST / MASS_OF_A_PARTICLE;
+let springOmega = Math.sqrt(springOmegaSq);
+let springPeriod = TWO_PI_VALUE() / springOmega;
+
+let xmaxStretchedString =  STRING_STRETCHED_LENGTH / 2;
+let xminStretchedString = -STRING_STRETCHED_LENGTH / 2;
+
+let ymin = -0.01;
+let ymax =  0.01;
+
+let time = 0.0;
+let step = 0;
+let dt = springPeriod * 0.01;
+
+const NORMAL_MODE_MAX = 20;
+let normalModesOmega = new Array(NORMAL_MODE_MAX + 1);
+
+function TWO_PI_VALUE() {
+  return Math.PI * 2.0;
+}
+
+function setup() {
+  const cnv = createCanvas(1000, 400);
+  cnv.parent(document.querySelector("main"));
+  background(255);
+  initialize();
+  frameRate(60);
+}
+
+function initializeString() {
+  for (let i = 0; i < NUM_OF_PARTICLES - 1; i++) {
+    springK[i] = SPRING_CONST;
+  }
+
+  for (let i = 0; i < NUM_OF_PARTICLES; i++) {
+    particlePosX[i] = xminStretchedString + i * SPRING_STRETCHED_LENGTH;
+    particlePosY[i] = 0.0;
+    particleVelX[i] = 0.0;
+    particleVelY[i] = 0.0;
+  }
+}
+
+function calculateNormalModes() {
+  normalModesOmega[0] = NaN;
+
+  for (let n = 1; n <= NORMAL_MODE_MAX; n++) {
+    const normalModeWaveNumber = n * Math.PI / STRING_STRETCHED_LENGTH;
+    normalModesOmega[n] = STRING_PHASE_VELOCITY * normalModeWaveNumber;
+  }
+}
+
+function initialize() {
+  initializeString();
+  calculateNormalModes();
+}
+
+function draw() {
+  background(255);
+
+  push();
+  translate(0, height);
+  scale(1, -1);
+
+  drawString();
+  drawHorizontalLine();
+
+  if (DISPLAY_PHASE_VELOCITY_MARKS) {
+    drawPhaseVelocityTickMarks();
+  }
+  pop();
+
+  if (RunningStateToggle) {
+    for (let n = 0; n < DISPLAY_SPEED; n++) {
+      rungeKutta4();
+      step += 1;
+
+      if (step % 100 === 0) {
+        console.log(
+          "step=", step,
+          "time=", time.toFixed(6),
+          "energy=", totalEnergy().toExponential(8)
+        );
+      }
+    }
+  }
+
+  drawTextOverlay();
+}
+
+function totalEnergy() {
+  let kineticEnergy = 0.0;
+  let potentialEnergy = 0.0;
+
+  for (let i = 0; i < NUM_OF_PARTICLES; i++) {
+    const posx = particlePosX[i];
+    const posy = particlePosY[i];
+    const velx = particleVelX[i];
+    const vely = particleVelY[i];
+
+    if (i >= 1 && i <= NUM_OF_PARTICLES - 1) {
+      kineticEnergy += 0.5 * MASS_OF_A_PARTICLE * (velx * velx + vely * vely);
+    }
+
+    if (i > 0) {
+      const posx0 = particlePosX[i - 1];
+      const posy0 = particlePosY[i - 1];
+      const l = dist(posx, posy, posx0, posy0) - SPRING_NATURAL_LENGTH;
+      potentialEnergy += 0.5 * SPRING_CONST * l * l;
+    }
+  }
+
+  return kineticEnergy + potentialEnergy;
+}
+
+function equationOfMotion(posx, posy, velx, vely,
+                          dposx, dposy, dvelx, dvely,
+                          dtLocal) {
+  const l0 = SPRING_NATURAL_LENGTH;
+  const dtm = dtLocal / MASS_OF_A_PARTICLE;
+
+  for (let i = 1; i <= NUM_OF_PARTICLES - 2; i++) {
+    const x0 = posx[i - 1];
+    const x1 = posx[i];
+    const x2 = posx[i + 1];
+    const y0 = posy[i - 1];
+    const y1 = posy[i];
+    const y2 = posy[i + 1];
+
+    const dist01 = dist(x0, y0, x1, y1);
+    const dist12 = dist(x1, y1, x2, y2);
+
+    const sForceAmp01 = springK[i - 1] * (dist01 - l0);
+    const sForceAmp12 = springK[i] * (dist12 - l0);
+
+    const unitVec01x = (x1 - x0) / dist01;
+    const unitVec01y = (y1 - y0) / dist01;
+    const unitVec12x = (x2 - x1) / dist12;
+    const unitVec12y = (y2 - y1) / dist12;
+
+    const sForce01x = sForceAmp01 * unitVec01x;
+    const sForce01y = sForceAmp01 * unitVec01y;
+    const sForce12x = sForceAmp12 * unitVec12x;
+    const sForce12y = sForceAmp12 * unitVec12y;
+
+    const frictionCoeff = 0.0;
+    const vForceX = -frictionCoeff * velx[i];
+    const vForceY = -frictionCoeff * vely[i];
+
+    let forceX = sForce12x - sForce01x + vForceX;
+    const forceY = sForce12y - sForce01y + vForceY;
+
+    // Horizontal motion is ignored.
+    forceX = 0.0;
+
+    dposx[i] = velx[i] * dtLocal;
+    dposy[i] = vely[i] * dtLocal;
+    dvelx[i] = forceX * dtm;
+    dvely[i] = forceY * dtm;
+  }
+}
+
+function boundaryCondition(t, x, y) {
+  const omega = normalModesOmega[1];
+  const amplitude = 0.0001;
+
+  x[0] = xminStretchedString;
+  y[0] = amplitude * Math.sin(omega * t);
+
+  x[NUM_OF_PARTICLES - 1] = xmaxStretchedString;
+  y[NUM_OF_PARTICLES - 1] = 0.0;
+}
+
+function mapx(x) {
+  const leftSpaceInPixel = width * 0.1;
+  const rightSpaceInPixel = leftSpaceInPixel;
+  const windowX1InPixel = leftSpaceInPixel;
+  const windowX2InPixel = width - rightSpaceInPixel;
+
+  return map(x, xminStretchedString, xmaxStretchedString,
+             windowX1InPixel, windowX2InPixel);
+}
+
+function mapy(y) {
+  const lowerSpaceInPixel = height * 0.1;
+  const upperSpaceInPixel = lowerSpaceInPixel;
+  const windowY1InPixel = lowerSpaceInPixel;
+  const windowY2InPixel = height - upperSpaceInPixel;
+
+  return map(y, ymin, ymax, windowY1InPixel, windowY2InPixel);
+}
+
+function drawHorizontalLine() {
+  stroke(100);
+  strokeWeight(1);
+  line(mapx(xminStretchedString), mapy(0),
+       mapx(xmaxStretchedString), mapy(0));
+}
+
+function drawPhaseVelocityTickMarks() {
+  const NUM_TICK_MARKS = 10;
+  const distanceBetweenDummyParticles = STRING_STRETCHED_LENGTH / NUM_TICK_MARKS;
+
+  // Right-moving dummy particles
+  strokeWeight(3);
+  stroke(140, 40, 40);
+  for (let i = 0; i < NUM_TICK_MARKS; i++) {
+    let x = i * distanceBetweenDummyParticles;
+    x += STRING_PHASE_VELOCITY * time;
+    x = x % STRING_STRETCHED_LENGTH;
+    x += xminStretchedString;
+
+    line(mapx(x), mapy(ymin * 0.9),
+         mapx(x), mapy(ymin * 0.95));
+  }
+
+  // Left-moving dummy particles
+  stroke(40, 140, 40);
+  for (let i = 0; i < NUM_TICK_MARKS; i++) {
+    let x = -i * distanceBetweenDummyParticles;
+    x -= STRING_PHASE_VELOCITY * time;
+    x = -((-x) % STRING_STRETCHED_LENGTH);
+    x += xmaxStretchedString;
+
+    line(mapx(x), mapy(ymax * 0.9),
+         mapx(x), mapy(ymax * 0.95));
+  }
+
+  strokeWeight(1);
+}
+
+function drawString() {
+  stroke(125, 125, 255);
+  strokeWeight(2);
+
+  for (let i = 0; i < NUM_OF_PARTICLES - 1; i++) {
+    if (springK[i] > 0.0) {
+      const x0 = particlePosX[i];
+      const y0 = particlePosY[i];
+      const x1 = particlePosX[i + 1];
+      const y1 = particlePosY[i + 1];
+
+      line(mapx(x0), mapy(y0), mapx(x1), mapy(y1));
+    }
+  }
+
+  fill(0);
+  noStroke();
+  for (let i = 0; i < NUM_OF_PARTICLES; i++) {
+    const x = particlePosX[i];
+    const y = particlePosY[i];
+    ellipse(mapx(x), mapy(y), 5, 5);
+  }
+}
+
+function drawTextOverlay() {
+  resetMatrix();
+
+  fill(0);
+  noStroke();
+  textSize(13);
+  textAlign(LEFT, TOP);
+
+  const energy = totalEnergy();
+  const status = RunningStateToggle ? "running" : "paused";
+
+  text(`time   = ${nf(time, 1, 6)} s`, 12, 12);
+  text(`step   = ${step}`, 12, 30);
+  text(`energy = ${energy.toExponential(8)}`, 12, 48);
+  text(`status = ${status}`, 12, 66);
+  text(`omega  = ${normalModesOmega[1].toFixed(4)}`, 12, 84);
+}
+
+function mousePressed() {
+  RunningStateToggle = !RunningStateToggle;
+}
+
+function rungeKutta4Advance(num,
+                            posx, posy, velx, vely,
+                            posx1, posy1, velx1, vely1,
+                            dposx, dposy, dvelx, dvely,
+                            factor) {
+  for (let j = 0; j < num; j++) {
+    posx[j] = posx1[j] + factor * dposx[j];
+    posy[j] = posy1[j] + factor * dposy[j];
+    velx[j] = velx1[j] + factor * dvelx[j];
+    vely[j] = vely1[j] + factor * dvely[j];
+  }
+}
+
+function zeroArray(n) {
+  return new Array(n).fill(0.0);
+}
+
+function rungeKutta4() {
+  const ONE_SIXTH = 1.0 / 6.0;
+  const ONE_THIRD = 1.0 / 3.0;
+
+  const posxprev = particlePosX.slice();
+  const posyprev = particlePosY.slice();
+  const velxprev = particleVelX.slice();
+  const velyprev = particleVelY.slice();
+
+  let posxwork = zeroArray(NUM_OF_PARTICLES);
+  let posywork = zeroArray(NUM_OF_PARTICLES);
+  let velxwork = zeroArray(NUM_OF_PARTICLES);
+  let velywork = zeroArray(NUM_OF_PARTICLES);
+
+  const dposx1 = zeroArray(NUM_OF_PARTICLES);
+  const dposx2 = zeroArray(NUM_OF_PARTICLES);
+  const dposx3 = zeroArray(NUM_OF_PARTICLES);
+  const dposx4 = zeroArray(NUM_OF_PARTICLES);
+
+  const dposy1 = zeroArray(NUM_OF_PARTICLES);
+  const dposy2 = zeroArray(NUM_OF_PARTICLES);
+  const dposy3 = zeroArray(NUM_OF_PARTICLES);
+  const dposy4 = zeroArray(NUM_OF_PARTICLES);
+
+  const dvelx1 = zeroArray(NUM_OF_PARTICLES);
+  const dvelx2 = zeroArray(NUM_OF_PARTICLES);
+  const dvelx3 = zeroArray(NUM_OF_PARTICLES);
+  const dvelx4 = zeroArray(NUM_OF_PARTICLES);
+
+  const dvely1 = zeroArray(NUM_OF_PARTICLES);
+  const dvely2 = zeroArray(NUM_OF_PARTICLES);
+  const dvely3 = zeroArray(NUM_OF_PARTICLES);
+  const dvely4 = zeroArray(NUM_OF_PARTICLES);
+
+  // step 1
+  equationOfMotion(posxprev, posyprev, velxprev, velyprev,
+                   dposx1, dposy1, dvelx1, dvely1, dt);
+
+  rungeKutta4Advance(NUM_OF_PARTICLES,
+                     posxwork, posywork, velxwork, velywork,
+                     posxprev, posyprev, velxprev, velyprev,
+                     dposx1, dposy1, dvelx1, dvely1, 0.5);
+
+  boundaryCondition(time, posxwork, posywork);
+  time += 0.5 * dt;
+
+  // step 2
+  equationOfMotion(posxwork, posywork, velxwork, velywork,
+                   dposx2, dposy2, dvelx2, dvely2, dt);
+
+  rungeKutta4Advance(NUM_OF_PARTICLES,
+                     posxwork, posywork, velxwork, velywork,
+                     posxprev, posyprev, velxprev, velyprev,
+                     dposx2, dposy2, dvelx2, dvely2, 0.5);
+
+  boundaryCondition(time, posxwork, posywork);
+
+  // step 3
+  equationOfMotion(posxwork, posywork, velxwork, velywork,
+                   dposx3, dposy3, dvelx3, dvely3, dt);
+
+  rungeKutta4Advance(NUM_OF_PARTICLES,
+                     posxwork, posywork, velxwork, velywork,
+                     posxprev, posyprev, velxprev, velyprev,
+                     dposx3, dposy3, dvelx3, dvely3, 1.0);
+
+  boundaryCondition(time, posxwork, posywork);
+  time += 0.5 * dt;
+
+  // step 4
+  equationOfMotion(posxwork, posywork, velxwork, velywork,
+                   dposx4, dposy4, dvelx4, dvely4, dt);
+
+  for (let j = 1; j < NUM_OF_PARTICLES - 1; j++) {
+    posxwork[j] = posxprev[j] +
+      ONE_SIXTH * dposx1[j] +
+      ONE_THIRD * dposx2[j] +
+      ONE_THIRD * dposx3[j] +
+      ONE_SIXTH * dposx4[j];
+
+    posywork[j] = posyprev[j] +
+      ONE_SIXTH * dposy1[j] +
+      ONE_THIRD * dposy2[j] +
+      ONE_THIRD * dposy3[j] +
+      ONE_SIXTH * dposy4[j];
+
+    velxwork[j] = velxprev[j] +
+      ONE_SIXTH * dvelx1[j] +
+      ONE_THIRD * dvelx2[j] +
+      ONE_THIRD * dvelx3[j] +
+      ONE_SIXTH * dvelx4[j];
+
+    velywork[j] = velyprev[j] +
+      ONE_SIXTH * dvely1[j] +
+      ONE_THIRD * dvely2[j] +
+      ONE_THIRD * dvely3[j] +
+      ONE_SIXTH * dvely4[j];
+  }
+
+  boundaryCondition(time, posxwork, posywork);
+
+  for (let j = 0; j < NUM_OF_PARTICLES; j++) {
+    particlePosX[j] = posxwork[j];
+    particlePosY[j] = posywork[j];
+    particleVelX[j] = velxwork[j];
+    particleVelY[j] = velywork[j];
+  }
+}
+</script>
+</body>
+</html>

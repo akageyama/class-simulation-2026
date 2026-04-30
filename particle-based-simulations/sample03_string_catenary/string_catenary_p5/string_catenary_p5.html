@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>string_catenary p5.js</title>
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      background: #f5f5f5;
+      font-family: sans-serif;
+    }
+    main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+    #info {
+      width: 500px;
+      background: white;
+      padding: 12px 16px;
+      margin-bottom: 12px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div id="info">
+    <strong>string_catenary</strong><br>
+    Mouse click: start/stop calculation
+  </div>
+</main>
+
+<script>
+// Converted from Processing to p5.js
+// Original: string_catenary.pde, Akira Kageyama
+
+//-------------------- input parameters --------------------
+const NUM_OF_PARTICLES = 13;  // When odd --> triangle, even --> semi-circle.
+const STRING_LENGTH = 2.0;    // m
+const STRING_MASS = 0.005;    // kg
+const PARTICLE_MASS = STRING_MASS / NUM_OF_PARTICLES;
+
+const SPRING_NATURAL_LENGTH = STRING_LENGTH / (NUM_OF_PARTICLES - 1);
+const SPRING_CHAR_PERIOD = 0.004; // sec
+const SPRING_CHAR_OMEGA = Math.PI * 2.0 / SPRING_CHAR_PERIOD;
+const SPRING_CHAR_OMEGA_SQ = SPRING_CHAR_OMEGA * SPRING_CHAR_OMEGA;
+const SPRING_CONST = PARTICLE_MASS * SPRING_CHAR_OMEGA_SQ;
+
+const GRAVITY_ACCELERATION = 9.8067;
+const DISPLAY_SPEED = 100;
+
+let RunningStateToggle = false;
+let DrawSolutionCurvesToggle = true;
+//----------------------------------------------------------
+
+let particlePosX = new Array(NUM_OF_PARTICLES);
+let particlePosY = new Array(NUM_OF_PARTICLES);
+let particleVelX = new Array(NUM_OF_PARTICLES);
+let particleVelY = new Array(NUM_OF_PARTICLES);
+let springK = new Array(NUM_OF_PARTICLES - 1);
+
+let footPointSeparation = (STRING_LENGTH / Math.PI) * 2.0;
+let footPointRightX = footPointSeparation / 2.0;
+let footPointLeftX = -footPointRightX;
+
+let xmin = -1.0;
+let xmax =  1.0;
+let ymin = -1.5;
+let ymax =  0.5;
+
+let time = 0.0;
+let step = 0;
+let dt = SPRING_CHAR_PERIOD * 0.1;
+
+function setup() {
+  const cnv = createCanvas(500, 500);
+  cnv.parent(document.querySelector("main"));
+  background(255);
+  initialize();
+  frameRate(60);
+}
+
+function initialize() {
+  for (let i = 0; i < NUM_OF_PARTICLES - 1; i++) {
+    springK[i] = SPRING_CONST;
+  }
+
+  particlePosX[0] = footPointLeftX;
+  particlePosY[0] = 0.0;
+  particleVelX[0] = 0.0;
+  particleVelY[0] = 0.0;
+
+  if (NUM_OF_PARTICLES % 2 === 0) {
+    initialCurveSingleSemiCircle();
+  } else {
+    initialCurveTriangle();
+  }
+}
+
+function initialCurveSingleSemiCircle() {
+  for (let i = 1; i < NUM_OF_PARTICLES; i++) {
+    const angle = i * (Math.PI / (NUM_OF_PARTICLES - 1));
+    const radius = footPointSeparation / 2.0;
+    particlePosX[i] = -radius * Math.cos(angle);
+    particlePosY[i] = -radius * Math.sin(angle);
+    particleVelX[i] = 0.0;
+    particleVelY[i] = 0.0;
+  }
+}
+
+function initialCurveTriangle() {
+  const l0 = SPRING_NATURAL_LENGTH;
+  const MID_PARTICLE = Math.floor(NUM_OF_PARTICLES / 2);
+
+  const triangleEdge1Length = footPointSeparation / 2.0;
+  const triangleEdge2Length = l0 * MID_PARTICLE;
+  const cosPhi = triangleEdge1Length / triangleEdge2Length;
+  const sinPhi = Math.sqrt(1.0 - Math.pow(cosPhi, 2));
+  const deltaX = l0 * cosPhi;
+  const deltaY = l0 * sinPhi;
+
+  let x0 = footPointLeftX;
+  let y0 = 0.0;
+
+  for (let i = 1; i <= MID_PARTICLE; i++) {
+    x0 = particlePosX[i] = x0 + deltaX;
+    y0 = particlePosY[i] = y0 - deltaY;
+    particleVelX[i] = 0.0;
+    particleVelY[i] = 0.0;
+  }
+
+  for (let i = MID_PARTICLE + 1; i < NUM_OF_PARTICLES; i++) {
+    x0 = particlePosX[i] = x0 + deltaX;
+    y0 = particlePosY[i] = y0 + deltaY;
+    particleVelX[i] = 0.0;
+    particleVelY[i] = 0.0;
+  }
+}
+
+function totalEnergy() {
+  let kineticEnergy = 0.0;
+  let potentialEnergy = 0.0;
+
+  for (let i = 0; i < NUM_OF_PARTICLES; i++) {
+    const posx = particlePosX[i];
+    const posy = particlePosY[i];
+    const velx = particleVelX[i];
+    const vely = particleVelY[i];
+
+    kineticEnergy += 0.5 * PARTICLE_MASS * (velx * velx + vely * vely);
+
+    if (i > 0) {
+      const posx0 = particlePosX[i - 1];
+      const posy0 = particlePosY[i - 1];
+      const l = dist(posx, posy, posx0, posy0) - SPRING_NATURAL_LENGTH;
+      potentialEnergy += 0.5 * springK[i - 1] * l * l;
+    }
+
+    potentialEnergy += PARTICLE_MASS * GRAVITY_ACCELERATION * posy;
+  }
+
+  return kineticEnergy + potentialEnergy;
+}
+
+function equationOfMotion(posx, posy, velx, vely,
+                          dposx, dposy, dvelx, dvely,
+                          dtLocal) {
+  const l0 = SPRING_NATURAL_LENGTH;
+  const dtm = dtLocal / PARTICLE_MASS;
+
+  for (let i = 1; i <= NUM_OF_PARTICLES - 2; i++) {
+    const x0 = posx[i - 1];
+    const x1 = posx[i];
+    const x2 = posx[i + 1];
+    const y0 = posy[i - 1];
+    const y1 = posy[i];
+    const y2 = posy[i + 1];
+
+    const dist01 = dist(x0, y0, x1, y1);
+    const dist12 = dist(x1, y1, x2, y2);
+
+    const sForceAmp01 = springK[i - 1] * (dist01 - l0);
+    const sForceAmp12 = springK[i] * (dist12 - l0);
+
+    const unitVec01x = (x1 - x0) / dist01;
+    const unitVec01y = (y1 - y0) / dist01;
+    const unitVec12x = (x2 - x1) / dist12;
+    const unitVec12y = (y2 - y1) / dist12;
+
+    const sForce01x = sForceAmp01 * unitVec01x;
+    const sForce01y = sForceAmp01 * unitVec01y;
+    const sForce12x = sForceAmp12 * unitVec12x;
+    const sForce12y = sForceAmp12 * unitVec12y;
+
+    const gForceY = -PARTICLE_MASS * GRAVITY_ACCELERATION;
+
+    // No dissipation, as in the Processing version.
+    const frictionCoeff = 0.0;
+    const vForceX = -frictionCoeff * velx[i];
+    const vForceY = -frictionCoeff * vely[i];
+
+    const forceX = sForce12x - sForce01x + vForceX;
+    const forceY = sForce12y - sForce01y + vForceY + gForceY;
+
+    dposx[i] = velx[i] * dtLocal;
+    dposy[i] = vely[i] * dtLocal;
+    dvelx[i] = forceX * dtm;
+    dvely[i] = forceY * dtm;
+  }
+}
+
+function boundaryCondition(t, x, y, vx, vy) {
+  x[0] = footPointLeftX;
+  y[0] = 0.0;
+  vx[0] = 0.0;
+  vy[0] = 0.0;
+
+  x[NUM_OF_PARTICLES - 1] = footPointRightX;
+  y[NUM_OF_PARTICLES - 1] = 0.0;
+  vx[NUM_OF_PARTICLES - 1] = 0.0;
+  vy[NUM_OF_PARTICLES - 1] = 0.0;
+}
+
+function mapx(x) {
+  const scale = width / (xmax - xmin);
+  return map(x, xmin, xmax, scale * xmin, scale * xmax);
+}
+
+function mapy(y) {
+  const scale = height / (ymax - ymin);
+  return map(y, ymin, ymax, scale * ymin, scale * ymax);
+}
+
+function drawHorizontalLine() {
+  stroke(200, 0, 200);
+  line(mapx(xmin), mapy(0), mapx(xmax), mapy(0));
+
+  stroke(200, 0, 0);
+  line(mapx(0), mapy(0), mapx(xmin), mapy(0));
+}
+
+function drawString() {
+  stroke(50, 100, 200);
+  strokeWeight(2);
+
+  for (let i = 0; i < NUM_OF_PARTICLES - 1; i++) {
+    if (springK[i] > 0.0) {
+      const x0 = particlePosX[i];
+      const y0 = particlePosY[i];
+      const x1 = particlePosX[i + 1];
+      const y1 = particlePosY[i + 1];
+
+      line(mapx(x0), mapy(y0), mapx(x1), mapy(y1));
+    }
+  }
+
+  noStroke();
+  fill(50, 100, 200);
+  for (let i = 0; i < NUM_OF_PARTICLES; i++) {
+    const x = particlePosX[i];
+    const y = particlePosY[i];
+    ellipse(mapx(x), mapy(y), 5, 5);
+  }
+}
+
+function cosh(x) {
+  return (Math.exp(x) + Math.exp(-x)) / 2.0;
+}
+
+function catenaryCurve(c1, x1, x) {
+  return c1 * (cosh(x / c1) - cosh(x1 / c1));
+}
+
+function drawSingleSolutionCurveOfCatenary(paramC1) {
+  const npoint = 20;
+  const dx = (footPointRightX - footPointLeftX) / (npoint - 1);
+
+  stroke(255, 220, 110);
+  strokeWeight(1);
+  noFill();
+
+  let x0 = footPointLeftX;
+  let y0 = catenaryCurve(paramC1, footPointRightX, x0);
+
+  for (let i = 1; i < npoint; i++) {
+    const x1 = footPointLeftX + dx * i;
+    const y1 = catenaryCurve(paramC1, footPointLeftX, x1);
+    line(mapx(x0), mapy(y0), mapx(x1), mapy(y1));
+    x0 = x1;
+    y0 = y1;
+  }
+}
+
+function drawSolutionCurvesOfCatenary() {
+  const paramC1Min = 0.3;
+  const paramC1Max = 0.5;
+  const ncurves = 10;
+
+  for (let n = 0; n < ncurves; n++) {
+    const paramC1 = paramC1Min + n * (paramC1Max - paramC1Min) / (ncurves - 1);
+    drawSingleSolutionCurveOfCatenary(paramC1);
+  }
+}
+
+function drawTextOverlay() {
+  resetMatrix();
+  fill(0);
+  noStroke();
+  textSize(13);
+  textAlign(LEFT, TOP);
+
+  const status = RunningStateToggle ? "running" : "paused";
+
+  const energy = totalEnergy();
+  text(`time   = ${nf(time, 1, 4)} s`, 12, 12);
+  text(`step   = ${step}`, 12, 30);
+  text(`energy = ${energy.toExponential(6)}`, 12, 48);
+  text(`status = ${status}`, 12, 66);
+}
+
+function draw() {
+  background(255);
+  stroke(0, 0, 255);
+
+  push();
+  translate(width / 2, height * ymax / (ymax - ymin));
+  scale(1, -1);
+
+  if (DrawSolutionCurvesToggle) {
+    drawSolutionCurvesOfCatenary();
+  }
+
+  drawString();
+  drawHorizontalLine();
+  pop();
+
+  if (RunningStateToggle) {
+    for (let n = 0; n < 20; n++) {
+      rungeKutta4();
+      step += 1;
+      if (step % 100 === 0) {
+        console.log("step=", step, "time=", time.toFixed(6), "energy=", totalEnergy());
+      }
+      if (step % 100 === 0) {
+        console.log(
+                "step=", step,
+                "time=", time.toFixed(6),
+                "energy=", totalEnergy().toExponential(8)
+                );
+      }
+    }
+  }
+
+  drawTextOverlay();
+}
+
+function mousePressed() {
+  RunningStateToggle = !RunningStateToggle;
+}
+
+function rungeKutta4Advance(num,
+                            posx, posy, velx, vely,
+                            posx1, posy1, velx1, vely1,
+                            dposx, dposy, dvelx, dvely,
+                            factor) {
+  for (let j = 0; j < num; j++) {
+    posx[j] = posx1[j] + factor * dposx[j];
+    posy[j] = posy1[j] + factor * dposy[j];
+    velx[j] = velx1[j] + factor * dvelx[j];
+    vely[j] = vely1[j] + factor * dvely[j];
+  }
+}
+
+function zeroArray(n) {
+  return new Array(n).fill(0.0);
+}
+
+function rungeKutta4() {
+  const ONE_SIXTH = 1.0 / 6.0;
+  const ONE_THIRD = 1.0 / 3.0;
+
+  const posxprev = particlePosX.slice();
+  const posyprev = particlePosY.slice();
+  const velxprev = particleVelX.slice();
+  const velyprev = particleVelY.slice();
+
+  let posxwork = zeroArray(NUM_OF_PARTICLES);
+  let posywork = zeroArray(NUM_OF_PARTICLES);
+  let velxwork = zeroArray(NUM_OF_PARTICLES);
+  let velywork = zeroArray(NUM_OF_PARTICLES);
+
+  const dposx1 = zeroArray(NUM_OF_PARTICLES);
+  const dposx2 = zeroArray(NUM_OF_PARTICLES);
+  const dposx3 = zeroArray(NUM_OF_PARTICLES);
+  const dposx4 = zeroArray(NUM_OF_PARTICLES);
+
+  const dposy1 = zeroArray(NUM_OF_PARTICLES);
+  const dposy2 = zeroArray(NUM_OF_PARTICLES);
+  const dposy3 = zeroArray(NUM_OF_PARTICLES);
+  const dposy4 = zeroArray(NUM_OF_PARTICLES);
+
+  const dvelx1 = zeroArray(NUM_OF_PARTICLES);
+  const dvelx2 = zeroArray(NUM_OF_PARTICLES);
+  const dvelx3 = zeroArray(NUM_OF_PARTICLES);
+  const dvelx4 = zeroArray(NUM_OF_PARTICLES);
+
+  const dvely1 = zeroArray(NUM_OF_PARTICLES);
+  const dvely2 = zeroArray(NUM_OF_PARTICLES);
+  const dvely3 = zeroArray(NUM_OF_PARTICLES);
+  const dvely4 = zeroArray(NUM_OF_PARTICLES);
+
+  // step 1
+  equationOfMotion(posxprev, posyprev, velxprev, velyprev,
+                   dposx1, dposy1, dvelx1, dvely1, dt);
+
+  rungeKutta4Advance(NUM_OF_PARTICLES,
+                     posxwork, posywork, velxwork, velywork,
+                     posxprev, posyprev, velxprev, velyprev,
+                     dposx1, dposy1, dvelx1, dvely1, 0.5);
+
+  boundaryCondition(time, posxwork, posywork, velxwork, velywork);
+  time += 0.5 * dt;
+
+  // step 2
+  equationOfMotion(posxwork, posywork, velxwork, velywork,
+                   dposx2, dposy2, dvelx2, dvely2, dt);
+
+  rungeKutta4Advance(NUM_OF_PARTICLES,
+                     posxwork, posywork, velxwork, velywork,
+                     posxprev, posyprev, velxprev, velyprev,
+                     dposx2, dposy2, dvelx2, dvely2, 0.5);
+
+  boundaryCondition(time, posxwork, posywork, velxwork, velywork);
+
+  // step 3
+  equationOfMotion(posxwork, posywork, velxwork, velywork,
+                   dposx3, dposy3, dvelx3, dvely3, dt);
+
+  rungeKutta4Advance(NUM_OF_PARTICLES,
+                     posxwork, posywork, velxwork, velywork,
+                     posxprev, posyprev, velxprev, velyprev,
+                     dposx3, dposy3, dvelx3, dvely3, 1.0);
+
+  boundaryCondition(time, posxwork, posywork, velxwork, velywork);
+  time += 0.5 * dt;
+
+  // step 4
+  equationOfMotion(posxwork, posywork, velxwork, velywork,
+                   dposx4, dposy4, dvelx4, dvely4, dt);
+
+  for (let j = 0; j < NUM_OF_PARTICLES; j++) {
+    posxwork[j] = posxprev[j] +
+      ONE_SIXTH * dposx1[j] +
+      ONE_THIRD * dposx2[j] +
+      ONE_THIRD * dposx3[j] +
+      ONE_SIXTH * dposx4[j];
+
+    posywork[j] = posyprev[j] +
+      ONE_SIXTH * dposy1[j] +
+      ONE_THIRD * dposy2[j] +
+      ONE_THIRD * dposy3[j] +
+      ONE_SIXTH * dposy4[j];
+
+    velxwork[j] = velxprev[j] +
+      ONE_SIXTH * dvelx1[j] +
+      ONE_THIRD * dvelx2[j] +
+      ONE_THIRD * dvelx3[j] +
+      ONE_SIXTH * dvelx4[j];
+
+    velywork[j] = velyprev[j] +
+      ONE_SIXTH * dvely1[j] +
+      ONE_THIRD * dvely2[j] +
+      ONE_THIRD * dvely3[j] +
+      ONE_SIXTH * dvely4[j];
+  }
+
+  boundaryCondition(time, posxwork, posywork, velxwork, velywork);
+
+  for (let j = 0; j < NUM_OF_PARTICLES; j++) {
+    particlePosX[j] = posxwork[j];
+    particlePosY[j] = posywork[j];
+    particleVelX[j] = velxwork[j];
+    particleVelY[j] = velywork[j];
+  }
+}
+</script>
+</body>
+</html>
