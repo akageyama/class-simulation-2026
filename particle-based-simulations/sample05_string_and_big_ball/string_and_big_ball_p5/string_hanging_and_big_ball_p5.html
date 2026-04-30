@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>string_hanging_and_big_ball p5.js</title>
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
+  <style>
+    body { margin: 0; background: #f5f5f5; font-family: sans-serif; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 20px; }
+    #info {
+      width: 500px; background: white; padding: 12px 16px; margin-bottom: 12px;
+      border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      line-height: 1.5; box-sizing: border-box;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div id="info">
+    <strong>string_hanging_and_big_ball</strong><br>
+    Mouse click:<br>
+    1st click: start calculation<br>
+    2nd click: release the string end particle<br>
+    3rd click and later: start/stop toggle
+  </div>
+</main>
+
+<script>
+const NUM_OF_STRING_PARTICLES = 31;
+const STRING_LENGTH = 2.0;
+const STRING_MASS = 0.005;
+const STRING_PARTICLE_MASS = STRING_MASS / NUM_OF_STRING_PARTICLES;
+const STRING_PARTICLE_RADIUS = 0.02;
+
+const SPRING_NATURAL_LENGTH = STRING_LENGTH / (NUM_OF_STRING_PARTICLES - 1);
+const STRING_SPRING_CHAR_PERIOD = 0.004;
+const STRING_SPRING_CHAR_OMEGA = Math.PI * 2.0 / STRING_SPRING_CHAR_PERIOD;
+const STRING_SPRING_CHAR_OMEGA_SQ = STRING_SPRING_CHAR_OMEGA * STRING_SPRING_CHAR_OMEGA;
+const STRING_SPRING_CONST = STRING_PARTICLE_MASS * STRING_SPRING_CHAR_OMEGA_SQ;
+
+const GRAVITY_ACCELERATION = 9.8067;
+const DISPLAY_SPEED = 200;
+
+let RunningStateToggle = false;
+let DrawSolutionCurvesToggle = true;
+let ReleaseStringEndParticle = false;
+let ThrowBiGBall = false;
+
+const NUM_OF_BIG_BALLS = 5;
+const BIG_BALL_INITIAL_THROW_VELOCITY = 1.0;
+const BIG_BALL_RADIUS = 0.05;
+const BIG_BALL_MASS = STRING_MASS * 2.0;
+const BIG_BALL_INTERNAL_SPRING_CONST = STRING_SPRING_CONST * 10.0;
+const BIG_BALL_INTERNAL_SPRING_CHAR_OMEGA_SQ =
+  BIG_BALL_INTERNAL_SPRING_CONST / BIG_BALL_MASS;
+const BIG_BALL_INTERNAL_SPRING_CHAR_OMEGA =
+  Math.sqrt(BIG_BALL_INTERNAL_SPRING_CHAR_OMEGA_SQ);
+const BIG_BALL_INTERNAL_SPRING_CHAR_PERIOD =
+  Math.PI * 2.0 / BIG_BALL_INTERNAL_SPRING_CHAR_OMEGA;
+
+const NUM_OF_ALL_PARTICLES = NUM_OF_STRING_PARTICLES + NUM_OF_BIG_BALLS;
+
+let particlePosX = new Array(NUM_OF_ALL_PARTICLES);
+let particlePosY = new Array(NUM_OF_ALL_PARTICLES);
+let particleVelX = new Array(NUM_OF_ALL_PARTICLES);
+let particleVelY = new Array(NUM_OF_ALL_PARTICLES);
+
+let stringSpringK = new Array(NUM_OF_STRING_PARTICLES - 1);
+let collidingForceOfStringParticleWithBigBallsX = new Array(NUM_OF_STRING_PARTICLES).fill(0.0);
+let collidingForceOfStringParticleWithBigBallsY = new Array(NUM_OF_STRING_PARTICLES).fill(0.0);
+
+let stringFootPointSeparation = (STRING_LENGTH / Math.PI) * 2.0;
+let stringFootPointRightX = stringFootPointSeparation / 2.0;
+let stringFootPointLeftX = -stringFootPointRightX;
+
+let xmin = -2.0, xmax = 2.0, ymin = -2.5, ymax = 0.5;
+
+let dtStringSpring = STRING_SPRING_CHAR_PERIOD * 0.1;
+let dtBigBallInternalSpring = BIG_BALL_INTERNAL_SPRING_CHAR_PERIOD * 0.1;
+
+let initialBigBallKineticEnergy =
+  0.5 * BIG_BALL_MASS * Math.pow(BIG_BALL_INITIAL_THROW_VELOCITY, 2.0);
+let initialBigBallPotentialEnergyMax =
+  BIG_BALL_MASS * GRAVITY_ACCELERATION * (ymax - ymin);
+let initialBigBallTotalEnergyMax =
+  initialBigBallKineticEnergy + initialBigBallPotentialEnergyMax;
+let bigBallFreeFallMaxVelocityOnFloor =
+  Math.sqrt(2.0 * initialBigBallTotalEnergyMax / BIG_BALL_MASS);
+let bigBallFreeFallCharacteristicTimeScale =
+  BIG_BALL_RADIUS / bigBallFreeFallMaxVelocityOnFloor;
+
+let dtBigBallResolveCollisionWithFloor =
+  bigBallFreeFallCharacteristicTimeScale * 0.1;
+
+let time = 0.0;
+let step = 0;
+
+let dt = Math.min(
+  dtStringSpring,
+  dtBigBallInternalSpring,
+  dtBigBallResolveCollisionWithFloor
+);
+
+function setup() {
+  const cnv = createCanvas(500, 500);
+  cnv.parent(document.querySelector("main"));
+  background(255);
+  initialize();
+  frameRate(60);
+}
+
+function initialize() {
+  for (let i = 0; i < NUM_OF_STRING_PARTICLES - 1; i++) stringSpringK[i] = STRING_SPRING_CONST;
+
+  particlePosX[0] = stringFootPointLeftX;
+  particlePosY[0] = 0.0;
+  particleVelX[0] = 0.0;
+  particleVelY[0] = 0.0;
+
+  if (NUM_OF_STRING_PARTICLES % 2 === 0) stringInitialCurveSingleSemiCircle();
+  else stringInitialCurveTriangle();
+
+  bigBallsInitialCondition();
+}
+
+function stringInitialCurveSingleSemiCircle() {
+  for (let i = 1; i < NUM_OF_STRING_PARTICLES; i++) {
+    const angle = i * (Math.PI / (NUM_OF_STRING_PARTICLES - 1));
+    const radius = stringFootPointSeparation / 2.0;
+    particlePosX[i] = -radius * Math.cos(angle);
+    particlePosY[i] = -radius * Math.sin(angle);
+    particleVelX[i] = 0.0;
+    particleVelY[i] = 0.0;
+  }
+}
+
+function stringInitialCurveTriangle() {
+  const l0 = SPRING_NATURAL_LENGTH;
+  const MID_PARTICLE = Math.floor(NUM_OF_STRING_PARTICLES / 2);
+
+  const triangleEdge1Length = stringFootPointSeparation / 2.0;
+  const triangleEdge2Length = l0 * MID_PARTICLE;
+  const cosPhi = triangleEdge1Length / triangleEdge2Length;
+  const sinPhi = Math.sqrt(1.0 - Math.pow(cosPhi, 2.0));
+  const deltaX = l0 * cosPhi;
+  const deltaY = l0 * sinPhi;
+
+  let x0 = stringFootPointLeftX;
+  let y0 = 0.0;
+
+  for (let i = 1; i <= MID_PARTICLE; i++) {
+    x0 = particlePosX[i] = x0 + deltaX;
+    y0 = particlePosY[i] = y0 - deltaY;
+    particleVelX[i] = 0.0;
+    particleVelY[i] = 0.0;
+  }
+
+  for (let i = MID_PARTICLE + 1; i < NUM_OF_STRING_PARTICLES; i++) {
+    x0 = particlePosX[i] = x0 + deltaX;
+    y0 = particlePosY[i] = y0 + deltaY;
+    particleVelX[i] = 0.0;
+    particleVelY[i] = 0.0;
+  }
+}
+
+function bigBallsInitialCondition() {
+  const shift = NUM_OF_STRING_PARTICLES;
+
+  for (let j = 0; j < NUM_OF_BIG_BALLS; j++) {
+    const jshift = j + shift;
+    let tempX = random(xmin * 0.8, xmax * 0.8);
+    let tempY = random(ymin * 0.8, ymax * 0.8);
+    let minimumDistanceToOtherBalls = 0.0;
+
+    while (minimumDistanceToOtherBalls < 1.1 * BIG_BALL_RADIUS) {
+      minimumDistanceToOtherBalls = 1.0e30;
+      tempX = random(xmin * 0.8, xmax * 0.8);
+      tempY = random(ymin * 0.8, ymax * 0.8);
+
+      for (let jj = 0; jj < j; jj++) {
+        const jjshift = jj + shift;
+        minimumDistanceToOtherBalls = Math.min(
+          minimumDistanceToOtherBalls,
+          dist(particlePosX[jjshift], particlePosY[jjshift], tempX, tempY)
+        );
+      }
+    }
+
+    particlePosX[jshift] = tempX;
+    particlePosY[jshift] = tempY;
+    particleVelX[jshift] = BIG_BALL_INITIAL_THROW_VELOCITY * Math.cos(random(Math.PI * 2.0));
+    particleVelY[jshift] = BIG_BALL_INITIAL_THROW_VELOCITY * Math.sin(random(Math.PI * 2.0));
+  }
+}
+
+function totalEnergy() {
+  return totalEnergyString() + totalEnergyBigBalls();
+}
+
+function totalEnergyString() {
+  let kineticEnergy = 0.0;
+  let potentialEnergy = 0.0;
+
+  for (let i = 0; i < NUM_OF_STRING_PARTICLES; i++) {
+    const velx = particleVelX[i], vely = particleVelY[i];
+    const posx = particlePosX[i], posy = particlePosY[i];
+
+    kineticEnergy += 0.5 * STRING_PARTICLE_MASS * (velx * velx + vely * vely);
+
+    if (i > 0) {
+      const l = dist(posx, posy, particlePosX[i - 1], particlePosY[i - 1]) - SPRING_NATURAL_LENGTH;
+      potentialEnergy += 0.5 * stringSpringK[i - 1] * l * l;
+    }
+
+    potentialEnergy += STRING_PARTICLE_MASS * GRAVITY_ACCELERATION * posy;
+  }
+
+  return kineticEnergy + potentialEnergy;
+}
+
+function totalEnergyBigBalls() {
+  let kineticEnergy = 0.0;
+  let potentialEnergy = 0.0;
+
+  for (let j = 0; j < NUM_OF_BIG_BALLS; j++) {
+    const jshift = NUM_OF_STRING_PARTICLES + j;
+    const velx = particleVelX[jshift], vely = particleVelY[jshift];
+    const posy = particlePosY[jshift];
+
+    kineticEnergy += 0.5 * BIG_BALL_MASS * (velx * velx + vely * vely);
+    potentialEnergy += BIG_BALL_MASS * GRAVITY_ACCELERATION * posy;
+  }
+
+  return kineticEnergy + potentialEnergy;
+}
+
+function equationOfMotion(posx, posy, velx, vely, dposx, dposy, dvelx, dvely, dtLocal) {
+  equationOfMotionBigBalls(posx, posy, velx, vely, dposx, dposy, dvelx, dvely, dtLocal);
+  equationOfMotionString(posx, posy, velx, vely, dposx, dposy, dvelx, dvely, dtLocal);
+}
+
+function equationOfMotionString(posx, posy, velx, vely, dposx, dposy, dvelx, dvely, dtLocal) {
+  const l0 = SPRING_NATURAL_LENGTH;
+  const dtm = dtLocal / STRING_PARTICLE_MASS;
+
+  for (let i = 1; i < NUM_OF_STRING_PARTICLES; i++) {
+    const frictionCoeff = 0.0001;
+    let forceX, forceY;
+
+    if (i < NUM_OF_STRING_PARTICLES - 1) {
+      const x0 = posx[i - 1], x1 = posx[i], x2 = posx[i + 1];
+      const y0 = posy[i - 1], y1 = posy[i], y2 = posy[i + 1];
+
+      const dist01 = dist(x0, y0, x1, y1);
+      const dist12 = dist(x1, y1, x2, y2);
+
+      const sForceAmp01 = stringSpringK[i - 1] * (dist01 - l0);
+      const sForceAmp12 = stringSpringK[i] * (dist12 - l0);
+
+      const unitVec01x = (x1 - x0) / dist01;
+      const unitVec01y = (y1 - y0) / dist01;
+      const unitVec12x = (x2 - x1) / dist12;
+      const unitVec12y = (y2 - y1) / dist12;
+
+      const sForce01x = sForceAmp01 * unitVec01x;
+      const sForce01y = sForceAmp01 * unitVec01y;
+      const sForce12x = sForceAmp12 * unitVec12x;
+      const sForce12y = sForceAmp12 * unitVec12y;
+
+      const gForceY = -STRING_PARTICLE_MASS * GRAVITY_ACCELERATION;
+      const vForceX = -frictionCoeff * velx[i];
+      const vForceY = -frictionCoeff * vely[i];
+
+      forceX = sForce12x - sForce01x + vForceX;
+      forceY = sForce12y - sForce01y + vForceY + gForceY;
+    } else {
+      const x0 = posx[i - 1], x1 = posx[i];
+      const y0 = posy[i - 1], y1 = posy[i];
+
+      const dist01 = dist(x0, y0, x1, y1);
+      const sForceAmp01 = stringSpringK[i - 1] * (dist01 - l0);
+
+      const unitVec01x = (x1 - x0) / dist01;
+      const unitVec01y = (y1 - y0) / dist01;
+
+      const sForce01x = sForceAmp01 * unitVec01x;
+      const sForce01y = sForceAmp01 * unitVec01y;
+
+      const gForceY = -STRING_PARTICLE_MASS * GRAVITY_ACCELERATION;
+      const vForceX = -frictionCoeff * velx[i];
+      const vForceY = -frictionCoeff * vely[i];
+
+      forceX = -sForce01x + vForceX;
+      forceY = -sForce01y + vForceY + gForceY;
+    }
+
+    forceX += collidingForceOfStringParticleWithBigBallsX[i];
+    forceY += collidingForceOfStringParticleWithBigBallsY[i];
+
+    dposx[i] = velx[i] * dtLocal;
+    dposy[i] = vely[i] * dtLocal;
+    dvelx[i] = forceX * dtm;
+    dvely[i] = forceY * dtm;
+  }
+}
+
+function equationOfMotionBigBalls(posx, posy, velx, vely, dposx, dposy, dvelx, dvely, dtLocal) {
+  const dtm = dtLocal / BIG_BALL_MASS;
+
+  for (let i = 0; i < NUM_OF_STRING_PARTICLES; i++) {
+    collidingForceOfStringParticleWithBigBallsX[i] = 0.0;
+    collidingForceOfStringParticleWithBigBallsY[i] = 0.0;
+  }
+
+  for (let j = 0; j < NUM_OF_BIG_BALLS; j++) {
+    const jshift = j + NUM_OF_STRING_PARTICLES;
+    const springForce = [0.0, 0.0];
+    const selfPos = [posx[jshift], posy[jshift]];
+    const targetPos = [0.0, 0.0];
+
+    let forceX = 0.0;
+    let forceY = 0.0;
+
+    for (let i = 0; i < NUM_OF_STRING_PARTICLES; i++) {
+      targetPos[0] = posx[i];
+      targetPos[1] = posy[i];
+
+      const contactRadius = STRING_PARTICLE_RADIUS + BIG_BALL_RADIUS;
+      springForceInteractingWithRigidBody(BIG_BALL_INTERNAL_SPRING_CONST, contactRadius, selfPos, targetPos, springForce);
+
+      forceX += springForce[0];
+      forceY += springForce[1];
+
+      collidingForceOfStringParticleWithBigBallsX[i] -= springForce[0];
+      collidingForceOfStringParticleWithBigBallsY[i] -= springForce[1];
+    }
+
+    for (let jj = 0; jj < NUM_OF_BIG_BALLS; jj++) {
+      if (jj === j) continue;
+
+      const jjshift = jj + NUM_OF_STRING_PARTICLES;
+      targetPos[0] = (posx[jjshift] + posx[jshift]) / 2.0;
+      targetPos[1] = (posy[jjshift] + posy[jshift]) / 2.0;
+
+      springForceInteractingWithRigidBody(BIG_BALL_INTERNAL_SPRING_CONST, BIG_BALL_RADIUS, selfPos, targetPos, springForce);
+      forceX += springForce[0];
+      forceY += springForce[1];
+    }
+
+    targetPos[0] = selfPos[0];
+    targetPos[1] = ymin;
+    springForceInteractingWithRigidBody(BIG_BALL_INTERNAL_SPRING_CONST, BIG_BALL_RADIUS, selfPos, targetPos, springForce);
+    forceX += springForce[0];
+    forceY += springForce[1];
+
+    targetPos[0] = xmin;
+    targetPos[1] = selfPos[1];
+    springForceInteractingWithRigidBody(BIG_BALL_INTERNAL_SPRING_CONST, BIG_BALL_RADIUS, selfPos, targetPos, springForce);
+    forceX += springForce[0];
+    forceY += springForce[1];
+
+    targetPos[0] = xmax;
+    targetPos[1] = selfPos[1];
+    springForceInteractingWithRigidBody(BIG_BALL_INTERNAL_SPRING_CONST, BIG_BALL_RADIUS, selfPos, targetPos, springForce);
+    forceX += springForce[0];
+    forceY += springForce[1];
+
+    const gForceY = -BIG_BALL_MASS * GRAVITY_ACCELERATION;
+    const frictionCoeff = 0.0;
+
+    forceX += -frictionCoeff * velx[jshift];
+    forceY += gForceY - frictionCoeff * vely[jshift];
+
+    dposx[jshift] = velx[jshift] * dtLocal;
+    dposy[jshift] = vely[jshift] * dtLocal;
+    dvelx[jshift] = forceX * dtm;
+    dvely[jshift] = forceY * dtm;
+  }
+}
+
+function springForceInteractingWithRigidBody(springConst, interactionDistance, posSelf, posRigidBody, outputForce) {
+  const selfX = posSelf[0], selfY = posSelf[1];
+  const rigidBodyX = posRigidBody[0], rigidBodyY = posRigidBody[1];
+  const d = dist(selfX, selfY, rigidBodyX, rigidBodyY);
+
+  let forceX = 0.0;
+  let forceY = 0.0;
+
+  if (d > 1.0e-12 && d < interactionDistance) {
+    const springShrinkLength = interactionDistance - d;
+    const springForceAmplitude = springConst * springShrinkLength;
+    const ux = (rigidBodyX - selfX) / d;
+    const uy = (rigidBodyY - selfY) / d;
+
+    forceX = -springForceAmplitude * ux;
+    forceY = -springForceAmplitude * uy;
+  }
+
+  outputForce[0] = forceX;
+  outputForce[1] = forceY;
+}
+
+function boundaryCondition(t, x, y, vx, vy) {
+  x[0] = stringFootPointLeftX;
+  y[0] = 0.0;
+  vx[0] = 0.0;
+  vy[0] = 0.0;
+
+  if (!ReleaseStringEndParticle) {
+    x[NUM_OF_STRING_PARTICLES - 1] = stringFootPointRightX;
+    y[NUM_OF_STRING_PARTICLES - 1] = 0.0;
+    vx[NUM_OF_STRING_PARTICLES - 1] = 0.0;
+    vy[NUM_OF_STRING_PARTICLES - 1] = 0.0;
+  }
+}
+
+function mapx(x) {
+  const scale = width / (xmax - xmin);
+  return map(x, xmin, xmax, scale * xmin, scale * xmax);
+}
+
+function mapy(y) {
+  const scale = height / (ymax - ymin);
+  return map(y, ymin, ymax, scale * ymin, scale * ymax);
+}
+
+function physicalLengthToPixel(len) {
+  return len * width / (xmax - xmin);
+}
+
+function drawHorizontalLine() {
+  stroke(200, 0, 200);
+  strokeWeight(1);
+  line(mapx(xmin), mapy(0), mapx(xmax), mapy(0));
+
+  stroke(200, 0, 0);
+  line(mapx(0), mapy(0), mapx(xmin), mapy(0));
+}
+
+function drawString() {
+  stroke(50, 100, 200);
+  strokeWeight(2);
+
+  for (let i = 0; i < NUM_OF_STRING_PARTICLES - 1; i++) {
+    if (stringSpringK[i] > 0.0) {
+      line(mapx(particlePosX[i]), mapy(particlePosY[i]),
+           mapx(particlePosX[i + 1]), mapy(particlePosY[i + 1]));
+    }
+  }
+
+  noStroke();
+  fill(50, 100, 200);
+  for (let i = 0; i < NUM_OF_STRING_PARTICLES; i++) {
+    circle(mapx(particlePosX[i]), mapy(particlePosY[i]),
+           physicalLengthToPixel(STRING_PARTICLE_RADIUS * 2.0));
+  }
+}
+
+function drawBigBalls() {
+  stroke(0);
+  strokeWeight(1);
+  fill(210, 250, 70);
+
+  for (let j = 0; j < NUM_OF_BIG_BALLS; j++) {
+    const jshift = NUM_OF_STRING_PARTICLES + j;
+    circle(mapx(particlePosX[jshift]), mapy(particlePosY[jshift]),
+           physicalLengthToPixel(BIG_BALL_RADIUS * 2.0));
+  }
+}
+
+function cosh(x) {
+  return (Math.exp(x) + Math.exp(-x)) / 2.0;
+}
+
+function catenaryCurve(c1, x1, x) {
+  return c1 * (cosh(x / c1) - cosh(x1 / c1));
+}
+
+function drawSingleSolutionCurveOfCatenary(paramC1) {
+  const npoint = 20;
+  const dx = (stringFootPointRightX - stringFootPointLeftX) / (npoint - 1);
+
+  stroke(255, 220, 110);
+  strokeWeight(1);
+
+  let x0 = stringFootPointLeftX;
+  let y0 = catenaryCurve(paramC1, stringFootPointRightX, x0);
+
+  for (let i = 1; i < npoint; i++) {
+    const x1 = stringFootPointLeftX + dx * i;
+    const y1 = catenaryCurve(paramC1, stringFootPointLeftX, x1);
+    line(mapx(x0), mapy(y0), mapx(x1), mapy(y1));
+    x0 = x1;
+    y0 = y1;
+  }
+}
+
+function drawSolutionCurvesOfCatenary() {
+  const paramC1Min = 0.3;
+  const paramC1Max = 0.5;
+  const ncurves = 10;
+
+  for (let n = 0; n < ncurves; n++) {
+    const paramC1 = paramC1Min + n * (paramC1Max - paramC1Min) / (ncurves - 1);
+    drawSingleSolutionCurveOfCatenary(paramC1);
+  }
+}
+
+function drawTextOverlay() {
+  resetMatrix();
+
+  fill(0);
+  noStroke();
+  textSize(13);
+  textAlign(LEFT, TOP);
+
+  text(`time   = ${nf(time, 1, 4)} s`, 12, 12);
+  text(`step   = ${step}`, 12, 30);
+  text(`energy = ${totalEnergy().toExponential(6)}`, 12, 48);
+}
+
+function draw() {
+  background(255);
+
+  push();
+  translate(width / 2.0, height * ymax / (ymax - ymin));
+  scale(1, -1);
+
+  if (DrawSolutionCurvesToggle) drawSolutionCurvesOfCatenary();
+
+  drawString();
+  drawHorizontalLine();
+  drawBigBalls();
+  pop();
+
+  if (RunningStateToggle) {
+    for (let n = 0; n < 20; n++) {
+      rungeKutta4();
+      step += 1;
+
+      if (step % 100 === 0) {
+        console.log("step=", step, "time=", time.toFixed(6), "energy=", totalEnergy().toExponential(8));
+      }
+    }
+  }
+
+  drawTextOverlay();
+}
+
+function mousePressed() {
+  if (!RunningStateToggle && !ReleaseStringEndParticle) {
+    RunningStateToggle = true;
+    return;
+  }
+
+  if (RunningStateToggle && !ReleaseStringEndParticle) {
+    ReleaseStringEndParticle = true;
+    DrawSolutionCurvesToggle = false;
+    return;
+  }
+
+  RunningStateToggle = !RunningStateToggle;
+}
+
+function rungeKutta4Advance(num, posx, posy, velx, vely,
+                            posx1, posy1, velx1, vely1,
+                            dposx, dposy, dvelx, dvely, factor) {
+  for (let j = 0; j < num; j++) {
+    posx[j] = posx1[j] + factor * dposx[j];
+    posy[j] = posy1[j] + factor * dposy[j];
+    velx[j] = velx1[j] + factor * dvelx[j];
+    vely[j] = vely1[j] + factor * dvely[j];
+  }
+}
+
+function zeroArray(n) {
+  return new Array(n).fill(0.0);
+}
+
+function rungeKutta4() {
+  const ONE_SIXTH = 1.0 / 6.0;
+  const ONE_THIRD = 1.0 / 3.0;
+
+  const posxprev = particlePosX.slice();
+  const posyprev = particlePosY.slice();
+  const velxprev = particleVelX.slice();
+  const velyprev = particleVelY.slice();
+
+  let posxwork = zeroArray(NUM_OF_ALL_PARTICLES);
+  let posywork = zeroArray(NUM_OF_ALL_PARTICLES);
+  let velxwork = zeroArray(NUM_OF_ALL_PARTICLES);
+  let velywork = zeroArray(NUM_OF_ALL_PARTICLES);
+
+  const dposx1 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dposx2 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dposx3 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dposx4 = zeroArray(NUM_OF_ALL_PARTICLES);
+
+  const dposy1 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dposy2 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dposy3 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dposy4 = zeroArray(NUM_OF_ALL_PARTICLES);
+
+  const dvelx1 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dvelx2 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dvelx3 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dvelx4 = zeroArray(NUM_OF_ALL_PARTICLES);
+
+  const dvely1 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dvely2 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dvely3 = zeroArray(NUM_OF_ALL_PARTICLES);
+  const dvely4 = zeroArray(NUM_OF_ALL_PARTICLES);
+
+  equationOfMotion(posxprev, posyprev, velxprev, velyprev,
+                   dposx1, dposy1, dvelx1, dvely1, dt);
+  rungeKutta4Advance(NUM_OF_ALL_PARTICLES, posxwork, posywork, velxwork, velywork,
+                     posxprev, posyprev, velxprev, velyprev,
+                     dposx1, dposy1, dvelx1, dvely1, 0.5);
+  boundaryCondition(time, posxwork, posywork, velxwork, velywork);
+  time += 0.5 * dt;
+
+  equationOfMotion(posxwork, posywork, velxwork, velywork,
+                   dposx2, dposy2, dvelx2, dvely2, dt);
+  rungeKutta4Advance(NUM_OF_ALL_PARTICLES, posxwork, posywork, velxwork, velywork,
+                     posxprev, posyprev, velxprev, velyprev,
+                     dposx2, dposy2, dvelx2, dvely2, 0.5);
+  boundaryCondition(time, posxwork, posywork, velxwork, velywork);
+
+  equationOfMotion(posxwork, posywork, velxwork, velywork,
+                   dposx3, dposy3, dvelx3, dvely3, dt);
+  rungeKutta4Advance(NUM_OF_ALL_PARTICLES, posxwork, posywork, velxwork, velywork,
+                     posxprev, posyprev, velxprev, velyprev,
+                     dposx3, dposy3, dvelx3, dvely3, 1.0);
+  boundaryCondition(time, posxwork, posywork, velxwork, velywork);
+  time += 0.5 * dt;
+
+  equationOfMotion(posxwork, posywork, velxwork, velywork,
+                   dposx4, dposy4, dvelx4, dvely4, dt);
+
+  for (let j = 0; j < NUM_OF_ALL_PARTICLES; j++) {
+    posxwork[j] = posxprev[j] + ONE_SIXTH * dposx1[j] + ONE_THIRD * dposx2[j] +
+                  ONE_THIRD * dposx3[j] + ONE_SIXTH * dposx4[j];
+
+    posywork[j] = posyprev[j] + ONE_SIXTH * dposy1[j] + ONE_THIRD * dposy2[j] +
+                  ONE_THIRD * dposy3[j] + ONE_SIXTH * dposy4[j];
+
+    velxwork[j] = velxprev[j] + ONE_SIXTH * dvelx1[j] + ONE_THIRD * dvelx2[j] +
+                  ONE_THIRD * dvelx3[j] + ONE_SIXTH * dvelx4[j];
+
+    velywork[j] = velyprev[j] + ONE_SIXTH * dvely1[j] + ONE_THIRD * dvely2[j] +
+                  ONE_THIRD * dvely3[j] + ONE_SIXTH * dvely4[j];
+  }
+
+  boundaryCondition(time, posxwork, posywork, velxwork, velywork);
+
+  for (let j = 0; j < NUM_OF_ALL_PARTICLES; j++) {
+    particlePosX[j] = posxwork[j];
+    particlePosY[j] = posywork[j];
+    particleVelX[j] = velxwork[j];
+    particleVelY[j] = velywork[j];
+  }
+}
+</script>
+</body>
+</html>
